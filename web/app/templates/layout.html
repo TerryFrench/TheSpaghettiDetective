@@ -1,5 +1,6 @@
 {% load static %}
-{% load account_status %}
+{% load bundle from vue %}
+{% load bundlechunk from vue %}
 
 <!DOCTYPE html>
 <html lang="en">
@@ -31,10 +32,10 @@
 
 
   <link rel="stylesheet" type="text/css" href="{% static 'hijack/hijack-styles.css' %}" />
-  <link rel="stylesheet" href="{% static 'vendor/css/bootstrap.min.css' %}">
   <link rel="stylesheet" href="{% static 'vendor/css/smart_wizard.css' %}">
 
-  <link rel="stylesheet" href="{% static 'css/app.css' %}">
+  {% bundle 'main' %}
+  {% bundlechunk 'chunk-vendors' %}
   {% block page_css %}{% endblock page_css %}
 
   <!-- favicons -->
@@ -102,12 +103,7 @@
             </li>
             {% endif %}
           {% else %}
-          <li class="nav-item">
-            <a href="/ent/subscription/#detective-hour-balance" class="nav-link badge-btn">
-                <img src="{% static 'img/detective-hour-inverse.png' %}"> <span id="user-credits" class="badge badge-light">{{ user.dh_balance | dh_badge_num }}</span>
-                <span class="sr-only">Detective Hours</span>
-            </a>
-          </li>
+          {% block nav_item_dh_balance %}{% endblock nav_item_dh_balance %}
           <li class="nav-item dropdown">
             <a class="nav-link dropdown-toggle user-menu" data-toggle="dropdown" href="#" id="{{user.id}}"
               aria-expanded="false">{{user.first_name|default:user.email}}

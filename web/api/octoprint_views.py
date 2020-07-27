@@ -13,6 +13,7 @@ import json
 import io
 from PIL import Image
 
+from .authentication import PrinterAuthentication
 from lib.file_storage import save_file_obj
 from lib import redis
 from lib.image import overlay_detections
@@ -23,17 +24,19 @@ from lib.prediction import update_prediction_with_detections, is_failing, VISUAL
 from lib.channels import send_status_to_web
 from config.celery import celery_app
 
-IMG_URL_TTL_SECONDS = 60*30
+IMG_URL_TTL_SECONDS = 60 * 30
 ALERT_COOLDOWN_SECONDS = 120
 
 LOGGER = logging.getLogger(__name__)
 
+
 def alert_suppressed(printer):
-    if not printer.watching or printer.current_print == None or printer.current_print.alert_muted_at:
+    if not printer.watching or printer.current_print is None or printer.current_print.alert_muted_at:
         return True
 
     last_acknowledged = printer.current_print.alert_acknowledged_at or datetime.fromtimestamp(0, timezone.utc)
     return (timezone.now() - last_acknowledged).total_seconds() < ALERT_COOLDOWN_SECONDS
+
 
 def alert_if_needed(printer):
     if alert_suppressed(printer):
@@ -46,6 +49,7 @@ def alert_if_needed(printer):
 
     printer.set_alert()
     send_failure_alert(printer, is_warning=True, print_paused=False)
+
 
 def pause_if_needed(printer):
     if alert_suppressed(printer):
@@ -65,11 +69,12 @@ def pause_if_needed(printer):
 
 class OctoPrintPicView(APIView):
     permission_classes = (IsAuthenticated,)
+    authentication_classes = (PrinterAuthentication,)
     parser_classes = (MultiPartParser,)
 
     def post(self, request):
         printer = request.auth
-        printer.refresh_from_db() # Connection is keep-alive, which means printer object can be stale.
+        printer.refresh_from_db()  # Connection is keep-alive, which means printer object can be stale.
 
         pic = request.FILES['pic']
         pic = cap_image_size(pic)
@@ -97,6 +102,9 @@ class OctoPrintPicView(APIView):
         update_prediction_with_detections(prediction, detections)
         prediction.save()
 
+        if prediction.current_p > settings.THRESHOLD_LOW * 0.2:  # Select predictions high enough for focused feedback
+            redis.print_high_prediction_add(printer.current_print.id, prediction.current_p, pic_id)
+
         pic.file.seek(0)  # Reset file object pointer so that we can load it again
         tagged_img = io.BytesIO()
         detections_to_visualize = [d for d in detections if d[1] > VISUALIZATION_THRESH]
@@ -122,6 +130,7 @@ class OctoPrintPicView(APIView):
 
 
 class OctoPrintPingView(APIView):
+    authentication_classes = (PrinterAuthentication,)
     permission_classes = (IsAuthenticated,)
 
     def get(self, request):
@@ -131,6 +140,7 @@ class OctoPrintPingView(APIView):
                 'is_pro': user.is_pro,
             }
         })
+
 
 def cap_image_size(pic):
     im = Image.open(pic.file)
@@ -142,9 +152,10 @@ def cap_image_size(pic):
     output = io.BytesIO()
     im.save(output, format='JPEG')
     output.seek(0)
-    return InMemoryUploadedFile(output,
-                                    u"pic",
-                                    'pic',
-                                    pic.content_type,
-                                    len(output.getbuffer()),
-                                    None)
+    return InMemoryUploadedFile(
+        output,
+        u"pic",
+        'pic',
+        pic.content_type,
+        len(output.getbuffer()),
+        None)

@@ -11,6 +11,8 @@ import logging
 from urllib.parse import urlparse
 import ipaddress
 from raven.contrib.django.raven_compat.models import client as sentryClient
+import smtplib
+import backoff
 
 from lib.file_storage import save_file_obj
 from lib.utils import save_print_snapshot, last_pic_of_print
@@ -20,13 +22,15 @@ from lib import site
 
 LOGGER = logging.getLogger(__name__)
 
+
 def send_failure_alert(printer, is_warning=True, print_paused=False):
     LOGGER.info(f'Printer {printer.user.id} {"smells fishy" if is_warning else "is probably failing"}. Sending Alerts')
     if not printer.current_print:
         LOGGER.warn(f'Trying to alert on printer without current print. printer_id: {printer.id}')
         return
 
-    (_, rotated_jpg_url) = save_print_snapshot(printer.current_print,
+    (_, rotated_jpg_url) = save_print_snapshot(
+        printer.current_print,
         last_pic_of_print(printer.current_print, 'tagged'),
         unrotated_jpg_path=None,
         rotated_jpg_path=f'snapshots/{printer.id}/{printer.current_print.id}/{str(timezone.now().timestamp())}_rotated.jpg')
@@ -61,6 +65,7 @@ def send_failure_alert(printer, is_warning=True, print_paused=False):
     except:
         sentryClient.captureException()
 
+
 def send_failure_alert_email(printer, rotated_jpg_url, is_warning, print_paused):
     if not settings.EMAIL_HOST:
         LOGGER.warn("Email settings are missing. Ignored send requests")
@@ -87,7 +92,8 @@ def send_failure_alert_email(printer, rotated_jpg_url, is_warning, print_paused)
         template_path='email/failure_alert.html',
         ctx=ctx,
         img_url=rotated_jpg_url,
-        )
+    )
+
 
 def send_failure_alert_sms(printer, is_warning, print_paused):
     if not settings.TWILIO_ENABLED:
@@ -96,9 +102,6 @@ def send_failure_alert_sms(printer, is_warning, print_paused):
 
     if not printer.user.sms_eligible():
         return
-
-    twilio_client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-    from_number = settings.TWILIO_FROM_NUMBER
 
     to_number = printer.user.phone_country_code + printer.user.phone_number
 
@@ -114,7 +117,8 @@ def send_failure_alert_sms(printer, is_warning, print_paused):
         'smells fishy' if is_warning else 'is probably failing',
         pausing_msg,
         site.build_full_url('/'))
-    twilio_client.messages.create(body=msg, to=to_number, from_=from_number)
+
+    send_sms(msg, to_number)
 
 
 def send_failure_alert_pushbullet(printer, rotated_jpg_url, is_warning, print_paused):
@@ -153,6 +157,7 @@ def send_failure_alert_pushbullet(printer, rotated_jpg_url, is_warning, print_pa
     except (PushError, PushbulletError) as e:
         LOGGER.error(e)
 
+
 def send_failure_alert_telegram(printer, rotated_jpg_url, is_warning, print_paused):
     if not printer.user.telegram_chat_id:
         return
@@ -182,6 +187,7 @@ _The Spaghetti Detective_ spotted some suspicious activity on your printer *{pri
     except requests.ConnectionError as e:
         LOGGER.error(e)
 
+
 def send_failure_alert_slack(printer, rotated_jpg_url, is_warning, print_paused):
     if not printer.user.slack_access_token:
         return
@@ -190,10 +196,10 @@ def send_failure_alert_slack(printer, rotated_jpg_url, is_warning, print_paused)
         url='https://slack.com/api/conversations.list',
         params={
             'token': printer.user.slack_access_token,
-            'types':'public_channel,private_channel'
+            'types': 'public_channel,private_channel'
         })
     req.raise_for_status()
-    slack_channel_ids = [ c['id'] for c in req.json()['channels'] if c['is_member'] ]
+    slack_channel_ids = [c['id'] for c in req.json()['channels'] if c['is_member']]
 
     for slack_channel_id in slack_channel_ids:
         msg = {
@@ -211,9 +217,9 @@ def send_failure_alert_slack(printer, rotated_jpg_url, is_warning, print_paused)
         try:
             msg['blocks'].append(
                 {
-                        "type": "image",
-                        "image_url": rotated_jpg_url,
-                        "alt_text": "Print snapshot"
+                    "type": "image",
+                    "image_url": rotated_jpg_url,
+                    "alt_text": "Print snapshot"
                 }
             )
         except:
@@ -223,12 +229,11 @@ def send_failure_alert_slack(printer, rotated_jpg_url, is_warning, print_paused)
             url='https://slack.com/api/chat.postMessage',
             headers={'Authorization': f'Bearer {printer.user.slack_access_token}'},
             json=msg
-            )
+        )
         req.raise_for_status()
 
 
-def send_print_notification(print_id, extra_ctx={}):
-    _print = Print.objects.select_related('printer__user').get(id=print_id)
+def send_print_notification(_print, extra_ctx={}):
     if _print.is_canceled():
         if not _print.printer.user.notify_on_canceled:
             return
@@ -262,12 +267,13 @@ def send_print_notification(print_id, extra_ctx={}):
     except:
         sentryClient.captureException()
 
+
 def send_print_notification_email(_print, extra_ctx={}):
     subject = f'{_print.filename} is canceled.' if _print.is_canceled() else f'🙌 {_print.filename} is ready.'
     ctx = {
         'print': _print,
         'print_time': str(_print.ended_at() - _print.started_at).split('.')[0],
-        'timelapse_link': site.build_full_url('/prints/'),
+        'timelapse_link': site.build_full_url(f'/prints/{_print.id}/'),
     }
     ctx.update(extra_ctx)
     send_email(
@@ -277,7 +283,8 @@ def send_print_notification_email(_print, extra_ctx={}):
         template_path='email/print_notification.html',
         ctx=ctx,
         img_url=_print.poster_url,
-        )
+    )
+
 
 def send_print_notification_telegram(_print):
     if not _print.printer.user.telegram_chat_id:
@@ -296,6 +303,7 @@ Your print job *{_print.filename}* {'has been canceled' if _print.is_canceled() 
         send_telegram_notification(_print.printer, notification_text, photo)
     except requests.ConnectionError as e:
         LOGGER.error(e)
+
 
 def send_print_notification_pushbullet(_print):
     if not _print.printer.user.has_valid_pushbullet_token():
@@ -322,6 +330,7 @@ def send_print_notification_pushbullet(_print):
     except (PushError, PushbulletError) as e:
         LOGGER.error(e)
 
+
 def send_print_notification_slack(_print):
     if not _print.printer.user.slack_access_token:
         return
@@ -330,10 +339,10 @@ def send_print_notification_slack(_print):
         url='https://slack.com/api/conversations.list',
         params={
             'token': _print.user.slack_access_token,
-            'types':'public_channel,private_channel'
+            'types': 'public_channel,private_channel'
         })
     req.raise_for_status()
-    slack_channel_ids = [ c['id'] for c in req.json()['channels'] if c['is_member'] ]
+    slack_channel_ids = [c['id'] for c in req.json()['channels'] if c['is_member']]
 
     for slack_channel_id in slack_channel_ids:
         msg = {
@@ -351,9 +360,9 @@ def send_print_notification_slack(_print):
         if _print.poster_url:
             msg['blocks'].append(
                 {
-                        "type": "image",
-                        "image_url": _print.poster_url,
-                        "alt_text": "Print snapshot"
+                    "type": "image",
+                    "image_url": _print.poster_url,
+                    "alt_text": "Print snapshot"
                 }
             )
 
@@ -361,12 +370,16 @@ def send_print_notification_slack(_print):
             url='https://slack.com/api/chat.postMessage',
             headers={'Authorization': f'Bearer {_print.user.slack_access_token}'},
             json=msg
-            )
+        )
         req.raise_for_status()
 
 
 # Helpers
-
+@backoff.on_exception(backoff.expo,
+                      (smtplib.SMTPServerDisconnected,
+                       smtplib.SMTPSenderRefused,
+                       smtplib.SMTPResponseException,),
+                      max_tries=3)
 def send_email(user, subject, mailing_list, template_path, ctx, img_url=None, verified_only=True, attachment=None):
     if not settings.EMAIL_HOST:
         LOGGER.warn("Email settings are missing. Ignored send requests")
@@ -394,12 +407,21 @@ def send_email(user, subject, mailing_list, template_path, ctx, img_url=None, ve
     for email in emails:
         ctx['unsub_url'] = unsub_url
         message = get_template(template_path).render(ctx)
-        msg = EmailMessage(subject, message,
+        msg = EmailMessage(
+            subject,
+            message,
             to=(email.email,),
             from_email=settings.DEFAULT_FROM_EMAIL,
             attachments=attachments,
-            headers = {'List-Unsubscribe': f'<{unsub_url}>, <mailto:support@thespaghettidetective.com?subject=Unsubscribe_{mailing_list}>'},)
+            headers={'List-Unsubscribe': f'<{unsub_url}>, <mailto:support@thespaghettidetective.com?subject=Unsubscribe_{mailing_list}>'},)
         msg.content_subtype = 'html'
         if attachment:
             msg.attach_file(attachment)
         msg.send()
+
+
+def send_sms(msg, to_number):
+    twilio_client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+    from_number = settings.TWILIO_FROM_NUMBER
+
+    twilio_client.messages.create(body=msg, to=to_number, from_=from_number)

@@ -131,4 +131,6 @@ docker-compose.override.yml
 
 *.code-workspace
 docker-compose.yml
-docker-compose.yml
+
+# generated webpack bundle stats for development
+web/frontend/webpack-stats.json

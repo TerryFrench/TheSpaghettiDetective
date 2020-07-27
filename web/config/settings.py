@@ -26,7 +26,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SECRET_KEY = os.environ.get(
     'DJANGO_SECRET_KEY', 'cg#p$g+j9tax!#a3cup@1$8obt2_+&k3q+pmu)5%asj6yjpkag')
 
-SESSION_COOKIE_AGE = 60*60*24*60 # User login session is 2 months
+SESSION_COOKIE_AGE = 60*60*24*60  # User login session is 2 months
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG') == 'True'
@@ -56,11 +56,14 @@ INSTALLED_APPS = [
     'jstemplate',
     'pushbullet',
     'safedelete',
+    'qr_code',
     'app',  # app has to come before allauth for template override to work
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
     'api',
+
+    'webpack_loader',
 ]
 
 if os.environ.get('SOCIAL_LOGIN') == 'True':
@@ -179,6 +182,12 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 200*1024*1024
 STATIC_URL = '/static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'static_build')
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+STATICFILES_DIRS = [
+    os.path.join(BASE_DIR, 'frontend/builds'),
+]
+
+SITE_ID = 1
+SITE_USES_HTTPS = os.environ.get('SITE_USES_HTTPS') == 'True'
 
 # Allauth
 
@@ -197,22 +206,12 @@ SOCIALACCOUNT_QUERY_EMAIL = True
 ACCOUNT_LOGOUT_ON_GET = True
 ACCOUNT_CONFIRM_EMAIL_ON_GET = True
 ACCOUNT_EMAIL_VERIFICATION = 'none'
-ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'https'
+ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'https' if SITE_USES_HTTPS else 'http'
 
 LOGIN_REDIRECT_URL = '/'
 ACCOUNT_ALLOW_SIGN_UP = os.environ.get('ACCOUNT_ALLOW_SIGN_UP') == 'True'
 
-SITE_ID = 1
-SITE_USES_HTTPS = os.environ.get('SITE_USES_HTTPS') == 'True'
-
 AUTH_USER_MODEL = 'app.User'
-
-REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': (
-        'api.authentication.PrinterAuthentication',
-        'rest_framework.authentication.SessionAuthentication',
-    ),
-}
 
 # Layout
 TEMPLATE_LAYOUT = "layout.html"
@@ -236,6 +235,24 @@ EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS') == 'True'
 
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL')
 
+# webpack bundle stats
+
+WEBPACK_LOADER_ENABLED = os.environ.get('WEBPACK_LOADER_ENABLED') == 'True'
+WEBPACK_STATS_PATH = os.path.join(
+    BASE_DIR, 'frontend/webpack-stats.json')
+WEBPACK_LOADER = {
+    'DEFAULT': {
+        'CACHE': not DEBUG,
+        'BUNDLE_DIR_NAME': 'frontend/',  # must end with slash
+        'STATS_FILE': WEBPACK_STATS_PATH,
+        'POLL_INTERVAL': 0.5,
+        'TIMEOUT': None,
+        'IGNORE': [r'.+\.hot-update.js', r'.+\.map'],
+        'LOADER_CLASS': 'webpack_loader.loader.WebpackLoader',
+    }
+}
+
+
 TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID')
 TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN')
 TWILIO_FROM_NUMBER = os.environ.get('TWILIO_FROM_NUMBER')
@@ -244,6 +261,7 @@ TWILIO_ENABLED = TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 
 SLACK_CLIENT_ID = None
+EXT_3D_GEEKS_ENDPOINT = None
 
 # settings export
 SETTINGS_EXPORT = [
@@ -252,6 +270,7 @@ SETTINGS_EXPORT = [
     'ACCOUNT_ALLOW_SIGN_UP',
     'SLACK_CLIENT_ID',
     'SITE_USES_HTTPS',
+    'EXT_3D_GEEKS_ENDPOINT',
 ]
 
 # Celery

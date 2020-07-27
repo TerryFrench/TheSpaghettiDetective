@@ -17,6 +17,7 @@ from simple_history.models import HistoricalRecords
 from safedelete.models import SafeDeleteModel
 from safedelete.managers import SafeDeleteManager
 from pushbullet import Pushbullet, errors
+from django.utils.html import mark_safe
 
 from config.celery import celery_app
 from lib import redis, channels
@@ -30,6 +31,7 @@ UNLIMITED_DH = 100000000    # A very big number to indicate this is unlimited DH
 def dh_is_unlimited(dh):
     return dh >= UNLIMITED_DH
 
+
 class UserManager(BaseUserManager):
     """Define a model manager for User model with no username field."""
 
@@ -37,18 +39,22 @@ class UserManager(BaseUserManager):
 
     def _create_user(self, email, password, **extra_fields):
         """Create and save a User with the given email and password."""
+
         if not email:
             raise ValueError('The given email must be set')
+
         email = self.normalize_email(email)
         user = self.model(email=email, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
+
         return user
 
     def create_user(self, email, password=None, **extra_fields):
         """Create and save a regular User with the given email and password."""
         extra_fields.setdefault('is_staff', False)
         extra_fields.setdefault('is_superuser', False)
+
         return self._create_user(email, password, **extra_fields)
 
     def create_superuser(self, email, password, **extra_fields):
@@ -58,6 +64,7 @@ class UserManager(BaseUserManager):
 
         if extra_fields.get('is_staff') is not True:
             raise ValueError('Superuser must have is_staff=True.')
+
         if extra_fields.get('is_superuser') is not True:
             raise ValueError('Superuser must have is_superuser=True.')
 
@@ -96,11 +103,14 @@ class User(AbstractUser):
     def is_primary_email_verified(self):
         if EmailAddress.objects.filter(user=self, email=self.email,
                                        verified=True).exists():
+
             return True
+
         return False
 
     def has_verified_email(self):
         # Give user 1 day before bugging them to verify their email addresses
+
         return timezone.now() - timedelta(days=1) < self.date_joined or EmailAddress.objects.filter(user=self, verified=True).exists()
 
     def has_valid_pushbullet_token(self):
@@ -109,9 +119,11 @@ class User(AbstractUser):
 
         try:
             Pushbullet(self.pushbullet_access_token)
+
             return True
         except errors.InvalidKeyError:
             return False
+
 
 # We use a signal as opposed to a form field because users may sign up using social buttons
 @receiver(post_save, sender=User)
@@ -124,6 +136,7 @@ def update_consented_at(sender, instance, created, **kwargs):
 class PrinterManager(SafeDeleteManager):
     def get_queryset(self):
         return super(PrinterManager, self).get_queryset().filter(archived_at__isnull=True)
+
 
 class Printer(SafeDeleteModel):
     class Meta:
@@ -155,6 +168,7 @@ class Printer(SafeDeleteModel):
     archived_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    service_token = models.CharField(max_length=64, unique=True, db_index=True, null=True, blank=False)
 
     objects = PrinterManager()
     with_archived = SafeDeleteManager()
@@ -165,33 +179,40 @@ class Printer(SafeDeleteModel):
     @property
     def status(self):
         status_data = redis.printer_status_get(self.id)
+
         for k, v in status_data.items():
             status_data[k] = json.loads(v)
+
         return dict_or_none(status_data)
 
     @property
     def pic(self):
         pic_data = redis.printer_pic_get(self.id)
+
         return dict_or_none(pic_data)
 
     @property
     def settings(self):
         p_settings = redis.printer_settings_get(self.id)
+
         for key in ('webcam_flipV', 'webcam_flipH', 'webcam_rotate90'):
             p_settings[key] = p_settings.get(key, 'False') == 'True'
         p_settings['ratio169'] = p_settings.get('webcam_streamRatio', '4:3') == '16:9'
+
         if p_settings.get('temp_profiles'):
             p_settings['temp_profiles'] = json.loads(p_settings.get('temp_profiles'))
+
         return p_settings
 
     def should_watch(self):
         if not self.watching or self.user.dh_balance < 0:
             return False
 
-        return self.current_print != None and self.current_print.alert_muted_at == None
+        return self.current_print is not None and self.current_print.alert_muted_at is None
 
     def actively_printing(self):
         printer_cur_state = redis.printer_status_get(self.id, 'state')
+
         return printer_cur_state and json.loads(printer_cur_state).get('flags', {}).get('printing', False)
 
     def update_current_print(self, filename, current_print_ts):
@@ -205,12 +226,16 @@ class Printer(SafeDeleteModel):
             return
 
         # currently printing
+
         if self.current_print:
             if self.current_print.ext_id == current_print_ts:
                 return
             # Unknown bug in plugin that causes current_print_ts not unique
-            if self.current_print.ext_id in range(current_print_ts-20, current_print_ts+20) and self.current_print.filename == filename:
-                LOGGER.warn(f'Apparently skewed print_ts received. ts1: {self.current_print.ext_id} - ts2: {current_print_ts} - print_id: {self.current_print_id} - printer_id: {self.id}')
+
+            if self.current_print.ext_id in range(current_print_ts - 20, current_print_ts + 20) and self.current_print.filename == filename:
+                LOGGER.warn(
+                    f'Apparently skewed print_ts received. ts1: {self.current_print.ext_id} - ts2: {current_print_ts} - print_id: {self.current_print_id} - printer_id: {self.id}')
+
                 return
             LOGGER.warn(f'Print not properly ended before next start. Stale print_id: {self.current_print_id} - printer_id: {self.id}')
             self.unset_current_print()
@@ -241,10 +266,10 @@ class Printer(SafeDeleteModel):
             printer=self,
             ext_id=current_print_ts,
             defaults={'filename': filename, 'started_at': timezone.now()},
-            )
+        )
 
         if cur_print.ended_at():
-            if cur_print.ended_at() > (timezone.now() - timedelta(seconds=30)): # Race condition. Some msg with valid print_ts arrived after msg with print_ts=-1
+            if cur_print.ended_at() > (timezone.now() - timedelta(seconds=30)):  # Race condition. Some msg with valid print_ts arrived after msg with print_ts=-1
                 return
             else:
                 raise Exception('Ended print is re-surrected! printer_id: {} | print_ts: {} | filename: {}'.format(self.id, current_print_ts, filename))
@@ -256,65 +281,64 @@ class Printer(SafeDeleteModel):
         PrintEvent.create(cur_print, PrintEvent.STARTED)
         self.send_should_watch_status()
 
-    ## return: succeeded, user_credited ##
+    ## return: succeeded? ##
     def resume_print(self, mute_alert=False):
-        if self.current_print == None: # when a link on an old email is clicked
-            return False, False
+        if self.current_print is None:  # when a link on an old email is clicked
+            return False
 
         self.current_print.paused_at = None
         self.current_print.save()
 
-        user_credited = self.acknowledge_alert(Print.NOT_FAILED)
+        self.acknowledge_alert(Print.NOT_FAILED)
         self.send_octoprint_command('resume')
-        return True, user_credited
 
-    ## return: succeeded, user_credited ##
+        return True
+
+    ## return: succeeded? ##
     def pause_print(self):
-        if self.current_print == None:
-            return False, False
+        if self.current_print is None:
+            return False
 
         self.current_print.paused_at = timezone.now()
         self.current_print.save()
 
         args = {'retract': self.retract_on_pause, 'lift_z': self.lift_z_on_pause}
+
         if self.tools_off_on_pause:
             args['tools_off'] = True
+
         if self.bed_off_on_pause:
             args['bed_off'] = True
         self.send_octoprint_command('pause', args=args)
 
-        return True, False
+        return True
 
-    ## return: succeeded, user_credited ##
+    ## return: succeeded? ##
     def cancel_print(self):
-        if self.current_print == None: # when a link on an old email is clicked
-            return False, False
+        if self.current_print is None:  # when a link on an old email is clicked
+            return False
 
-        user_credited = self.acknowledge_alert(Print.FAILED)
+        self.acknowledge_alert(Print.FAILED)
         self.send_octoprint_command('cancel')
-        return True, user_credited
+
+        return True
 
     def set_alert(self):
         self.current_print.alerted_at = timezone.now()
         self.current_print.save()
 
     def acknowledge_alert(self, alert_overwrite):
-        if not self.current_print.alerted_at:
-            return False
-
-        user_credited = False
-        if self.current_print.alert_overwrite == None:
-            celery_app.send_task('app_ent.tasks.credit_dh_for_contribution', args=[self.user.id, 1, 'Credit | Tag "{}"'.format(self.current_print.filename[:100])])
-            user_credited = True
+        if not self.current_print.alerted_at:   # Not even alerted. Shouldn't be here. Maybe user error?
+            return
 
         self.current_print.alert_acknowledged_at = timezone.now()
         self.current_print.alert_overwrite = alert_overwrite
         self.current_print.save()
-        return user_credited
 
     def mute_current_print(self, muted):
         self.current_print.alert_muted_at = timezone.now() if muted else None
         self.current_print.save()
+
         if muted:
             PrintEvent.create(self.current_print, PrintEvent.ALERT_MUTED)
         else:
@@ -322,15 +346,14 @@ class Printer(SafeDeleteModel):
 
         self.send_should_watch_status()
 
-    ## messages to printer
+    # messages to printer
 
     def send_octoprint_command(self, command, args={}):
-        channels.send_msg_to_printer(self.id, {'commands': [ {'cmd': command, 'args': args} ]})
+        channels.send_msg_to_printer(self.id, {'commands': [{'cmd': command, 'args': args}]})
 
     def send_should_watch_status(self):
         self.refresh_from_db()
         channels.send_msg_to_printer(self.id, {'remote_status': {'should_watch': self.should_watch()}})
-
 
     def __str__(self):
         return str(self.id)
@@ -387,6 +410,7 @@ class PrinterPrediction(models.Model):
             self.lifetime_frame_num,
         )
 
+
 @receiver(post_save, sender=Printer)
 def create_printer_prediction(sender, instance, created, **kwargs):
     if created:
@@ -441,6 +465,7 @@ class Print(SafeDeleteModel):
         choices=ALERT_OVERWRITE,
         null=True
     )
+    access_consented_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -450,6 +475,7 @@ class Print(SafeDeleteModel):
     def ended_at(self):
         return self.cancelled_at or self.finished_at
 
+    # TODO: remove me after print page switches to Vue
     def end_status(self):
         return '(Cancelled)' if self.cancelled_at else ''
 
@@ -465,6 +491,7 @@ class Print(SafeDeleteModel):
     @property
     def expecting_detective_view(self):
         return self.tagged_video_url or self.uploaded_at
+
 
 class PrintEvent(models.Model):
     STARTED = 'STARTED'
@@ -496,10 +523,11 @@ class PrintEvent(models.Model):
 
     def create(print, event_type):
         event = PrintEvent.objects.create(
-            print = print,
-            event_type = event_type,
-            alert_muted = (print.alert_muted_at is not None)
+            print=print,
+            event_type=event_type,
+            alert_muted=(print.alert_muted_at is not None)
         )
+
         if event_type in PrintEvent.ENDED:
             celery_app.send_task(settings.PRINT_EVENT_HANDLER, args=[print.id])
 
@@ -511,6 +539,7 @@ class SharedResource(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+
 class GCodeFile(SafeDeleteModel):
     user = models.ForeignKey(User, on_delete=models.CASCADE, null=False)
     filename = models.CharField(max_length=1000, null=False, blank=False)
@@ -520,3 +549,30 @@ class GCodeFile(SafeDeleteModel):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+
+class PrintShotFeedback(models.Model):
+    LOOKS_BAD = 'LOOKS_BAD'
+    LOOKS_OK = 'LOOKS_OK'
+    UNANSWERED = 'UNDECIDED'
+
+    ANSWER_CHOICES = (
+        (LOOKS_BAD, "It contains spaghetti"),
+        (LOOKS_OK, "It does NOT contain spaghetti"),
+        (UNANSWERED, "I'll decide later"),
+    )
+
+    print = models.ForeignKey(Print, on_delete=models.CASCADE)
+
+    image_url = models.CharField(max_length=2000, null=False, blank=False)
+
+    answer = models.CharField(max_length=16, choices=ANSWER_CHOICES, blank=True, null=True, db_index=True)
+    answered_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def image_tag(self):
+        return mark_safe(f'<img src="{self.image_url}" width="150" height="150" />')
+
+    image_tag.short_description = 'Image'
