@@ -1,3 +1,5 @@
+// TODO: Delete me after switching to Vue
+
 "use strict";
 
 
@@ -7,7 +9,7 @@ $(document).ready(function () {
     var printerCard = $('.printer-card');
     var printerId = printerCard.attr('id');
     var wsUri = printerCard.data('share-token') ?
-    '/ws/shared/web/' + printerCard.data('share-token') + '/' : '/ws/web/' + printerId + '/';
+    '/ws/share_token/web/' + printerCard.data('share-token') + '/' : '/ws/web/' + printerId + '/';
     var printerWs = new PrinterWebSocket();
 
     printerWs.openPrinterWebSockets(printerId, wsUri, function(printer) {
@@ -46,7 +48,7 @@ $(document).ready(function () {
     });
 
     var mmPerStep = getPrinterLocalPref(MM_PER_STEP_PREF, printerId, "10");
-    var toToggleOn = printerCard.find('.btn-group-toggle input[value=' + mmPerStep + ']')
+    var toToggleOn = printerCard.find('.btn-group-toggle input[value="' + mmPerStep + '"]')
     toToggleOn.prop('checked', true);
     toToggleOn.parent().addClass('active').siblings().removeClass('active');
 });

@@ -9,29 +9,21 @@
 </template>
 
 <script>
-import axios from 'axios'
-import get from 'lodash/get'
 import RadialGauge from 'vue2-canvas-gauges/src/RadialGauge'
 
-const ALERT_THRESHOLD = 0.4
-
 export default {
+  name: 'Gauge',
   components: {
     RadialGauge
   },
   data: () => {
     return {
-      predictions: [],
-      currentValue: 0
     }
   },
   props: {
-    currentPosition: {
+    normalizedP: {
       type: Number,
-      default: 0
     },
-
-    predictionJsonUrl: String,
 
     options: {
       // https://canvas-gauges.com/documentation/user-guide/configuration
@@ -70,10 +62,8 @@ export default {
 
   computed: {
     value() {
-      const num = Math.round(this.predictions.length * this.currentPosition)
-      return this.scaleP(get(this.predictions[num], 'fields.ewm_mean'))
+      return this.normalizedP*100
     },
-
     titleText() {
       switch (this.level()) {
       case 0:
@@ -100,27 +90,7 @@ export default {
     }
   },
 
-  mounted() {
-    this.fetchData()
-  },
-
   methods: {
-    fetchData() {
-      axios.get(this.predictionJsonUrl).then(response => {
-        this.predictions = response.data
-      })
-    },
-
-    scaleP(p) {
-      var scaleAboveCutOff = 100.0 / 3.0 / (1 - ALERT_THRESHOLD)
-      var scaleBelowCutOff = 200.0 / 3.0 / ALERT_THRESHOLD
-      if (p > ALERT_THRESHOLD) {
-        return (p - ALERT_THRESHOLD) * scaleAboveCutOff + 200.0 / 3.0
-      } else {
-        return p * scaleBelowCutOff
-      }
-    },
-
     level() {
       if (this.value > 66) {
         return 2
@@ -139,10 +109,10 @@ export default {
 
 #title
   position: absolute
-  top: 50%
   left: 0px
-  width: 100%
   text-align: center
+  width: 100%
+  top: 50%
 
 .tsd-gauge-container
   position: relative

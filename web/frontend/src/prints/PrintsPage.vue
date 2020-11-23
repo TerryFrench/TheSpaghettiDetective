@@ -120,7 +120,7 @@ import axios from 'axios'
 import findIndex from 'lodash/findIndex'
 import MugenScroll from 'vue-mugen-scroll'
 
-import apis from '../lib/apis'
+import urls from '../lib/server_urls'
 import { normalizedPrint } from '../lib/normalizers'
 import PrintCard from './PrintCard.vue'
 import FullScreenPrintCard from './FullScreenPrintCard.vue'
@@ -167,7 +167,7 @@ export default {
 
       this.loading = true
       axios
-        .get(apis.prints(), {
+        .get(urls.prints(), {
           params: {
             start: this.prints.length,
             limit: 6,
@@ -224,17 +224,26 @@ export default {
       }).then(userAction => {
         if (userAction.isConfirmed) {
           axios
-            .post(apis.printsBulkDelete(), { print_ids: selectedPrintIds })
+            .post(urls.printsBulkDelete(), { print_ids: selectedPrintIds })
             .then(() => {
-              selectedPrintIds.forEach(printId => this.onPrintDeleted(printId))
+              selectedPrintIds.forEach(printId => this.onPrintDeleted(printId, false))
+              this.$swal.Toast.fire({
+                title: `${selectedPrintIds.length} time-lapse(s) deleted!`,
+              })
               this.selectedPrintIds = []
             })
         }
       })
     },
-    onPrintDeleted(printId) {
+    onPrintDeleted(printId, toast=true) {
       const i = findIndex(this.prints, p => p.id == printId)
+      const print = this.prints[i]
       this.$delete(this.prints, i)
+      if (toast) {
+        this.$swal.Toast.fire({
+          title: `Time-lapse ${print.filename} deleted!`,
+        })
+      }
     },
     printDataChanged(data) {
       const i = findIndex(this.prints, p => p.id == data.id)

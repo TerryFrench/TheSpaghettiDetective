@@ -27,7 +27,7 @@ from lib.file_storage import list_dir, retrieve_to_file_obj, save_file_obj, dele
 from lib.utils import ml_api_auth_headers, orientation_to_ffmpeg_options, save_print_snapshot, last_pic_of_print
 from lib.prediction import update_prediction_with_detections, is_failing, VISUALIZATION_THRESH
 from lib.image import overlay_detections
-from lib import redis
+from lib import cache
 from app.notifications import send_print_notification
 from api.octoprint_views import IMG_URL_TTL_SECONDS
 
@@ -208,12 +208,10 @@ def service_webhook(print_id, event_type, **kwargs):
 
     _print = Print.objects.select_related('printer__user').get(id=print_id)
     webhook_payload = service_webhook_payload(event_type, _print, kwargs)
-    LOGGER.debug(webhook_payload)
     req = requests.post(
         url= settings.EXT_3D_GEEKS_ENDPOINT,
         json=webhook_payload
     )
-
 
 # Websocket connection count house upkeep jobs
 
@@ -259,7 +257,7 @@ def generate_print_poster(_print):
                                                                rotated_jpg_path=f'private/{_print.id}_poster.jpg')
 
     if unrotated_jpg_url:
-        redis.printer_pic_set(_print.printer.id, {'img_url': unrotated_jpg_url}, ex=IMG_URL_TTL_SECONDS)
+        cache.printer_pic_set(_print.printer.id, {'img_url': unrotated_jpg_url}, ex=IMG_URL_TTL_SECONDS)
 
     if rotated_jpg_url:
         _print.poster_url = rotated_jpg_url
@@ -306,17 +304,15 @@ def select_print_shots_for_feedback(_print):
 
         return sorted(selected_timestamps)
 
-    selected_predictions = highest_7_predictions(redis.print_highest_predictions_get(_print.id))
-
-    to_dir = os.path.join(tempfile.gettempdir(), 'ff_' + str(_print.id))
-    shutil.rmtree(to_dir, ignore_errors=True)
-    os.mkdir(to_dir)
-
-    local_imgs = download_files([f'raw/{_print.printer.id}/{_print.id}/{ts}.jpg' for ts in selected_predictions], to_dir)
-    for local_img in local_imgs:
-        with open(local_img, 'rb') as local_img_file:
-            _, img_url = save_file_obj(f'ff_printshots/raw/{_print.printer.id}/{_print.id}/{local_img.name}', local_img_file, settings.TIMELAPSE_CONTAINER)
-            PrintShotFeedback.objects.create(print=_print, image_url=img_url)
+    for ts in highest_7_predictions(cache.print_highest_predictions_get(_print.id)):
+        (_, rotated_jpg_url) = save_print_snapshot(
+            _print,
+            f'raw/{_print.printer.id}/{_print.id}/{ts}.jpg',
+            unrotated_jpg_path=None,
+            rotated_jpg_path=f'ff_printshots/{_print.user.id}/{_print.id}/{ts}.jpg',
+            to_container=settings.PICS_CONTAINER,
+            to_long_term_storage=False)
+        PrintShotFeedback.objects.create(print=_print, image_url=rotated_jpg_url)
 
 
 def service_webhook_payload(event_type, _print, extra_dict):

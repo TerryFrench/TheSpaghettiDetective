@@ -4,15 +4,24 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework import status
+from django.utils.timezone import now
+from django.conf import settings
+from django.http import HttpRequest
+
 import requests
 
 from .authentication import CsrfExemptSessionAuthentication
-from app.models import *
-from .serializers import *
-from app.models import PrintShotFeedback
-from lib import redis
+from app.models import (
+    Print, Printer, GCodeFile, PrintShotFeedback, PrinterPrediction, MobileDevice,
+    calc_normalized_p)
+from .serializers import (
+    GCodeFileSerializer, PrinterSerializer, PrintSerializer, MobileDeviceSerializer,
+    PrintShotFeedbackSerializer)
 from lib.channels import send_status_to_web
+from lib import cache
 from config.celery import celery_app
+
+PREDICTION_FETCH_TIMEOUT = 20
 
 
 class PrinterViewSet(viewsets.ModelViewSet):
@@ -21,7 +30,12 @@ class PrinterViewSet(viewsets.ModelViewSet):
     serializer_class = PrinterSerializer
 
     def get_queryset(self):
-        return Printer.objects.filter(user=self.request.user)
+        if self.request.query_params.get('with_archived') == 'true':
+            return Printer.with_archived.filter(user=self.request.user)
+        else:
+            return Printer.objects.filter(user=self.request.user)
+
+    # TODO: Should these be removed, or changed to POST after switching to Vue?
 
     @action(detail=True, methods=['get'])
     def cancel_print(self, request, pk=None):
@@ -69,7 +83,7 @@ class PrinterViewSet(viewsets.ModelViewSet):
     def send_webhook_test(self, request, pk=None):
         printer = self.current_printer_or_404(pk)
         req = requests.post(
-            url= settings.EXT_3D_GEEKS_ENDPOINT,
+            url=settings.EXT_3D_GEEKS_ENDPOINT,
             json=dict(
                 token=printer.service_token,
                 event="test"))
@@ -102,21 +116,13 @@ class PrintViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return Print.objects.filter(user=self.request.user)
 
-    @action(detail=True, methods=['get', 'post'])
+    @action(detail=True, methods=['post'])
     def alert_overwrite(self, request, pk=None):
         print = get_object_or_404(self.get_queryset(), pk=pk)
-
-        # TODO: remove this after switching to focused feedback
-        if request.method == "GET":
-            print.alert_overwrite = request.GET.get('value', None)
-            print.save()
-
-            return Response(dict(user_credited=False))
-        else:
-            print.alert_overwrite = request.data.get('value', None)
-            print.save()
-            serializer = self.serializer_class(print, many=False)
-            return Response(serializer.data)
+        print.alert_overwrite = request.data.get('value', None)
+        print.save()
+        serializer = self.serializer_class(print, many=False)
+        return Response(serializer.data)
 
     def list(self, request):
         queryset = self.get_queryset().prefetch_related('printshotfeedback_set').filter(video_url__isnull=False)
@@ -140,7 +146,7 @@ class PrintViewSet(viewsets.ModelViewSet):
         limit = int(request.GET.get('limit', '12'))
         # The "right" way to do it is `queryset[start:start+limit]`. However, it slows down the query by 100x because of the "offset 12 limit 12" clause. Weird.
         # Maybe related to https://stackoverflow.com/questions/21385555/postgresql-query-very-slow-with-limit-1
-        results = list(queryset)[start:start+limit]
+        results = list(queryset)[start:start + limit]
 
         serializer = self.serializer_class(results, many=True)
         return Response(serializer.data)
@@ -150,6 +156,57 @@ class PrintViewSet(viewsets.ModelViewSet):
         select_prints_ids = request.data.get('print_ids', [])
         self.get_queryset().filter(id__in=select_prints_ids).delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=['get'])
+    def prediction_json(self, request, pk) -> Response:
+        p: Print = get_object_or_404(
+            self.get_queryset().select_related('printer'),
+            pk=pk)
+
+        # check as it's null=True
+        if not p.prediction_json_url:
+            return Response([])
+
+        headers = {
+            'If-Modified-Since': request.headers.get('if-modified-since'),
+            'If-None-Match': request.headers.get('if-none-match'),
+        }
+
+        r = requests.get(url=p.prediction_json_url,
+                         timeout=PREDICTION_FETCH_TIMEOUT,
+                         headers={k: v for k, v in headers.items() if v is not None})
+        r.raise_for_status()
+
+        resp_headers = {
+            'Last-Modified': r.headers.get('Last-Modified'),
+            'Etag': r.headers.get('Etag')
+        }
+
+        # might be cached already
+        if r.status_code == 304:
+            return Response(
+                None,
+                status=304,
+                headers={k: v for k, v in resp_headers.items() if v is not None}
+            )
+
+        data = r.json()
+
+        detective_sensitivity: float = (
+            p.printer.detective_sensitivity
+            if p.printer is not None else
+            Printer._meta.get_field('detective_sensitivity').get_default()
+        )
+
+        for raw_pred in data:
+            pred = PrinterPrediction(**raw_pred['fields'])
+            raw_pred['fields']['normalized_p'] = calc_normalized_p(
+                detective_sensitivity, pred)
+
+        return Response(
+            data,
+            headers={k: v for k, v in resp_headers.items() if v is not None}
+        )
 
 
 class GCodeFileViewSet(viewsets.ModelViewSet):
@@ -196,3 +253,28 @@ class PrintShotFeedbackViewSet(mixins.RetrieveModelMixin,
 
         resp = super(PrintShotFeedbackViewSet, self).update(request, *args, **kwargs)
         return Response({'instance': resp.data, 'credited_dhs': 2 if should_credit else 0})
+
+
+class OctoPrintTunnelUsageViewSet(mixins.ListModelMixin,
+                                  viewsets.GenericViewSet):
+
+    def list(self, request, *args, **kwargs):
+        return Response({'total': cache.octoprinttunnel_get_stats(self.request.user.id)})
+
+
+class MobileDeviceViewSet(viewsets.ModelViewSet):
+    permission_classes = (IsAuthenticated,)
+    authentication_classes = (CsrfExemptSessionAuthentication,)
+    serializer_class = MobileDeviceSerializer
+
+    def create(self, request):
+        device, created = MobileDevice.with_inactive.get_or_create(
+            user=request.user,
+            device_token=request.data['device_token'],
+            defaults=request.data
+        )
+        if not created and device.deactivated_at:
+            device.deactivated_at = None
+            device.save()
+
+        return Response(self.serializer_class(device, many=False).data)

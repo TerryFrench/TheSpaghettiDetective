@@ -17,11 +17,12 @@ import backoff
 from lib.file_storage import save_file_obj
 from lib.utils import save_print_snapshot, last_pic_of_print
 from app.models import Printer, Print
-from app.telegram_bot import send_notification as send_telegram_notification
+from lib.integrations.telegram_bot import send_notification as send_telegram_notification
+from lib.integrations.discord import send_discord_notification
+from lib import mobile_notifications
 from lib import site
 
 LOGGER = logging.getLogger(__name__)
-
 
 def send_failure_alert(printer, is_warning=True, print_paused=False):
     LOGGER.info(f'Printer {printer.user.id} {"smells fishy" if is_warning else "is probably failing"}. Sending Alerts')
@@ -36,6 +37,10 @@ def send_failure_alert(printer, is_warning=True, print_paused=False):
         rotated_jpg_path=f'snapshots/{printer.id}/{printer.current_print.id}/{str(timezone.now().timestamp())}_rotated.jpg')
 
     # Calls wrapped in individual try/except because anyone of them could fail, and we still want the flow to continue
+    try:
+        mobile_notifications.send_failure_alert(printer, rotated_jpg_url, is_warning, print_paused)
+    except:
+        sentryClient.captureException()
 
     try:
         if printer.user.alert_by_email:
@@ -64,6 +69,11 @@ def send_failure_alert(printer, is_warning=True, print_paused=False):
             send_failure_alert_slack(printer, rotated_jpg_url, is_warning, print_paused)
     except:
         sentryClient.captureException()
+
+    try:
+        send_failure_alert_discord(printer, rotated_jpg_url, is_warning, print_paused)
+    except:
+        capture_exception()
 
 
 def send_failure_alert_email(printer, rotated_jpg_url, is_warning, print_paused):
@@ -233,6 +243,35 @@ def send_failure_alert_slack(printer, rotated_jpg_url, is_warning, print_paused)
         req.raise_for_status()
 
 
+def send_failure_alert_discord(printer, rotated_jpg_url, is_warning, print_paused):
+    if not printer.user.discord_webhook:
+        return
+
+    color = 0x9863F4 # purple, as used on the main website
+
+    if is_warning:
+        color = 0xEED202 # hazard yellow
+    elif is_warning and print_paused:
+        color = 0xcf142b # stop red
+
+    action = ''
+    if print_paused:
+        action = 'The print is paused.'
+    elif printer.action_on_failure == Printer.PAUSE and is_warning:
+        action = 'Printer is NOT paused because The Detective is not very sure about it.'
+
+    text = f"""Hi {printer.user.first_name or ''},
+
+_The Spaghetti Detective_ spotted some suspicious activity on your printer *{printer.name}*.
+
+{action}"""
+
+    try:
+        send_discord_notification(printer, text, color, printer.user.discord_webhook, rotated_jpg_url)
+    except Exception as e:
+        LOGGER.error(e)
+
+
 def send_print_notification(_print, extra_ctx={}):
     if _print.is_canceled():
         if not _print.printer.user.notify_on_canceled:
@@ -262,6 +301,12 @@ def send_print_notification(_print, extra_ctx={}):
         sentryClient.captureException()
 
     try:
+        if _print.printer.user.print_notification_by_discord:
+            send_print_notification_discord(_print)
+    except:
+        capture_exception()
+
+    try:
         if _print.printer.user.is_pro:
             send_print_notification_slack(_print)
     except:
@@ -274,6 +319,7 @@ def send_print_notification_email(_print, extra_ctx={}):
         'print': _print,
         'print_time': str(_print.ended_at() - _print.started_at).split('.')[0],
         'timelapse_link': site.build_full_url(f'/prints/{_print.id}/'),
+        'user_pref_url': site.build_full_url(f'/user_preferences/'),
     }
     ctx.update(extra_ctx)
     send_email(
@@ -373,6 +419,19 @@ def send_print_notification_slack(_print):
         )
         req.raise_for_status()
 
+def send_print_notification_discord(_print):
+    if not _print.printer.user.discord_webhook:
+        return
+
+    text = f"""Hi {_print.printer.user.first_name or ''},
+
+Your print job *{_print.filename}* {'has been canceled' if _print.is_canceled() else 'is done'} on printer {_print.printer.name}.
+"""
+
+    try:
+        send_discord_notification(_print.printer, text, 0xcf142b, _print.printer.user.discord_webhook, _print.poster_url)
+    except Exception as e:
+        LOGGER.error(e)
 
 # Helpers
 @backoff.on_exception(backoff.expo,

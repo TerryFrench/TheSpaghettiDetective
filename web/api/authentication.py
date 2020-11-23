@@ -38,9 +38,14 @@ class PrinterWSAuthMiddleWare:
                     printer = Printer.objects.select_related('user').get(auth_token=token_key)
                     printer.is_authenticated = True   # To make Printer duck-quack as authenticated User in Django Channels
                     scope['user'] = printer
-            elif scope['path'].startswith('/ws/shared/'):
+            elif scope['path'].startswith('/ws/share_token/'):
                 printer = SharedResource.objects.select_related('printer').get(share_token=scope['path'].split(
                     '/')[-2]).printer  # scope['path'].split('/')[-2] is the share_token in uri
+                printer.is_authenticated = True   # To make Printer duck-quack as authenticated User in Django Channels
+                scope['user'] = printer
+            elif scope['path'].startswith('/ws/token/'):
+                printer = Printer.objects.get(auth_token=scope['path'].split(
+                    '/')[-2])  # scope['path'].split('/')[-2] is the auth_token in uri
                 printer.is_authenticated = True   # To make Printer duck-quack as authenticated User in Django Channels
                 scope['user'] = printer
         except ObjectDoesNotExist:
@@ -53,7 +58,17 @@ class PrinterServiceTokenAuthentication(TokenAuthentication):
         try:
             printer = Printer.objects.select_related('user').get(service_token=key)
         except ObjectDoesNotExist:
-            raise AuthenticationFailed({'error': 'Invalid or Inactive Token', 'is_authenticated': False})
+            return None
+
+        return printer.user, printer
+
+
+class PrinterShareTokenAuthentication(TokenAuthentication):
+    def authenticate_credentials(self, key, request=None):
+        try:
+            printer = SharedResource.objects.select_related('printer').get(share_token=key).printer
+        except ObjectDoesNotExist:
+            return None
 
         return printer.user, printer
 

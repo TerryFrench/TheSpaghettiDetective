@@ -26,7 +26,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SECRET_KEY = os.environ.get(
     'DJANGO_SECRET_KEY', 'cg#p$g+j9tax!#a3cup@1$8obt2_+&k3q+pmu)5%asj6yjpkag')
 
-SESSION_COOKIE_AGE = 60*60*24*60  # User login session is 2 months
+SESSION_COOKIE_AGE = 60 * 60 * 24 * 60  # User login session is 2 months
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG') == 'True'
@@ -174,7 +174,7 @@ LOGGING = {
 
 # Django settings
 
-DATA_UPLOAD_MAX_MEMORY_SIZE = 200*1024*1024
+DATA_UPLOAD_MAX_MEMORY_SIZE = 200 * 1024 * 1024
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/2.1/howto/static-files/
@@ -188,6 +188,11 @@ STATICFILES_DIRS = [
 
 SITE_ID = 1
 SITE_USES_HTTPS = os.environ.get('SITE_USES_HTTPS') == 'True'
+
+# Google recaptcha V3
+
+RECAPTCHA_SITE_KEY = os.environ.get('RECAPTCHA_SITE_KEY')
+RECAPTCHA_SECRET_KEY = os.environ.get('RECAPTCHA_SECRET_KEY')
 
 # Allauth
 
@@ -212,11 +217,22 @@ LOGIN_REDIRECT_URL = '/'
 ACCOUNT_ALLOW_SIGN_UP = os.environ.get('ACCOUNT_ALLOW_SIGN_UP') == 'True'
 
 AUTH_USER_MODEL = 'app.User'
+SOCIALACCOUNT_ADAPTER = 'app.accounts.SocialAccountAdapter'
+SOCIALACCOUNT_PROVIDERS = {
+    'facebook': {
+        'VERIFIED_EMAIL': True
+    }
+}
+
+if RECAPTCHA_SITE_KEY:
+    ACCOUNT_FORMS = {'signup': 'app.forms.RecaptchaSignupForm'}
 
 # Layout
 TEMPLATE_LAYOUT = "layout.html"
 
 # Sentry
+
+SENTRY_DSN = os.environ.get('SENTRY_DSN')
 if os.environ.get('SENTRY_DSN'):
     INSTALLED_APPS = INSTALLED_APPS + [
         'raven.contrib.django.raven_compat',
@@ -263,6 +279,8 @@ TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 SLACK_CLIENT_ID = None
 EXT_3D_GEEKS_ENDPOINT = None
 
+OCTOPRINT_TUNNEL_CAP = int(os.environ.get('OCTOPRINT_TUNNEL_CAP', '1099511627776'))  # 1TB by default
+
 # settings export
 SETTINGS_EXPORT = [
     'TWILIO_ENABLED',
@@ -271,6 +289,9 @@ SETTINGS_EXPORT = [
     'SLACK_CLIENT_ID',
     'SITE_USES_HTTPS',
     'EXT_3D_GEEKS_ENDPOINT',
+    'RECAPTCHA_SITE_KEY',
+    'SENTRY_DSN',
+    'OCTOPRINT_TUNNEL_CAP',
 ]
 
 # Celery
@@ -283,6 +304,8 @@ CHANNEL_LAYERS = {
         'BACKEND': 'channels_redis.core.RedisChannelLayer',
         'CONFIG': {
             "hosts": [REDIS_URL],
+            'capacity': 1500,
+            'expiry': 60,
         },
     },
 }

@@ -1,0 +1,18 @@
+{% extends settings.TEMPLATE_LAYOUT %}
+
+{% load bundle from vue %}
+
+{% block content %}
+
+<div id="octoprint-tunnel-mount">
+  <octo-print-tunnel-page
+  :printer-id={{ printer.id }}
+  :is-pro={{ printer.user.is_pro|yesno:"true,false" }}
+  :usage-cap={{ settings.OCTOPRINT_TUNNEL_CAP }}
+  >
+  </octo-print-tunnel-page>
+</div>
+
+{% bundle 'octoprint_tunnel' %}
+
+{% endblock content%}

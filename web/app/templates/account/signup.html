@@ -17,7 +17,7 @@
       <h1 class="text-center">{% trans "Sign Up" %}</h1>
       <div style="margin-bottom: 1rem; padding-left: 24px;">
         <div class="custom-control custom-checkbox form-check-inline">
-          <input type="checkbox" class="custom-control-input" id="tos-checkbox">
+          <input type="checkbox" class="custom-control-input" id="tos-checkbox" checked>
           <label class="custom-control-label" style="font-size: 16px;" for="tos-checkbox">By signing up, I agree to The
             Spaghetti Detective's <a class="link" href="https://www.thespaghettidetective.com/terms.html">Terms of
               Use</a> and <a class="link" href="https://www.thespaghettidetective.com/privacy.html">Privacy
@@ -26,9 +26,9 @@
       </div>
       {% if socialaccount_providers %}
       <div class="social-login">
-        <a href="{% provider_login_url "facebook" method="oauth2" %}" class="btn facebook-btn social-btn disabled"
+        <a href="{% provider_login_url "facebook" method="oauth2" %}" class="btn facebook-btn social-btn"
           role="button"><span><i class="fab fa-facebook-f"></i> Sign up with Facebook</span> </a>
-        <a href="{% provider_login_url "google" method="oauth2" %}" class="btn google-btn social-btn disabled"
+        <a href="{% provider_login_url "google" method="oauth2" %}" class="btn google-btn social-btn"
           role="button"><span><i class="fab fa-google-plus-g"></i> Sign up with Google+</span> </a>
       </div>
       {% endif %}
@@ -36,6 +36,7 @@
       <div style="width: 100%; height: 20px; border-bottom: 1px solid white; margin-bottom: 16px;"></div>
       <form class="signup form-signup" id="signup_form" method="POST" action="{% url 'account_signup' %}">
         {% csrf_token %}
+        <input type="hidden" name="recaptcha_token" id='recaptcha'>
         {% with WIDGET_ERROR_CLASS='field_error' WIDGET_REQUIRED_CLASS='field_required' %}
         <div class="form-group">
           {% render_field form.email class="form-control" aria-describedby="emailHelp" placeholder="Email address" %}
@@ -75,7 +76,7 @@
         {% if redirect_field_value %}
         <input type="hidden" name="{{ redirect_field_name }}" value="{{ redirect_field_value }}" />
         {% endif %}
-        <button type="submit" class="btn btn-primary btn-block" disabled>{% trans "Sign Up" %}</button>
+        <button type="submit" class="btn btn-primary btn-block">{% trans "Sign Up" %}</button>
         <a class="button secondaryAction float-right pt-2"
           href="{% url 'account_login' %}{% if redirect_field_value %}?next={{redirect_field_value}}{% endif %}">{% trans "Sign In" %}
           >>></a>
@@ -87,4 +88,20 @@
 
 {% block page_js %}
 <script src="{% static 'js/signup.js' %}"></script>
+{% if settings.RECAPTCHA_SITE_KEY %}
+<script src="https://www.google.com/recaptcha/api.js?render={{ settings.RECAPTCHA_SITE_KEY }}"></script>
+<script>
+  grecaptcha.ready(function() {
+      $('#signup_form').submit(function(e){
+          var form = this;
+          e.preventDefault()
+          grecaptcha.execute('{{ settings.RECAPTCHA_SITE_KEY }}', {action: 'signup_form'}).then(function(token) {
+              $('#recaptcha').val(token)
+              form.submit()
+          });
+      })
+
+  });
+</script>
+{% endif %}
 {% endblock page_js %}

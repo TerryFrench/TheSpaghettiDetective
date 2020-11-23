@@ -17,7 +17,7 @@ def dict_or_none(dict_value):
 
 
 def set_as_str_if_present(target_dict, source_dict, key, target_key=None):
-    if source_dict.get(key):
+    if key in source_dict:
         if not target_key:
             target_key = key
         target_dict[target_key] = json.dumps(source_dict.get(key))
@@ -47,7 +47,6 @@ def orientation_to_ffmpeg_options(printer_settings):
 
     return options
 
-
 def last_pic_of_print(_print, path_prefix):
     print_pics = list_dir(f'{path_prefix}/{_print.printer.id}/{_print.id}/', settings.PICS_CONTAINER, long_term_storage=False)
     if not print_pics:
@@ -56,11 +55,11 @@ def last_pic_of_print(_print, path_prefix):
     return print_pics[-1]
 
 
-def save_print_snapshot(_print, input_path, unrotated_jpg_path=None, rotated_jpg_path=None):
+def save_print_snapshot(_print, input_path, unrotated_jpg_path=None, rotated_jpg_path=None, to_container=settings.TIMELAPSE_CONTAINER, to_long_term_storage=True):
     if not input_path:
         return (None, None)
 
-    to_dir = os.path.join(tempfile.gettempdir(), str(_print.id))
+    to_dir = tempfile.mkdtemp()
     shutil.rmtree(to_dir, ignore_errors=True)
     os.mkdir(to_dir)
     unrotated_jpg = os.path.join(to_dir, 'unrotated.jpg')
@@ -71,7 +70,7 @@ def save_print_snapshot(_print, input_path, unrotated_jpg_path=None, rotated_jpg
 
     if unrotated_jpg_path:
         with open(unrotated_jpg, 'rb') as file_obj:
-            _, unrotated_jpg_url = save_file_obj(unrotated_jpg_path, file_obj, settings.TIMELAPSE_CONTAINER)
+            _, unrotated_jpg_url = save_file_obj(unrotated_jpg_path, file_obj, to_container, long_term_storage=to_long_term_storage)
 
     if rotated_jpg_path:
         ffmpeg_extra_options = orientation_to_ffmpeg_options(_print.printer.settings)
@@ -79,8 +78,13 @@ def save_print_snapshot(_print, input_path, unrotated_jpg_path=None, rotated_jpg
         cmd = f'ffmpeg -y -i {unrotated_jpg} {ffmpeg_extra_options} {rotated_jpg}'
         subprocess.run(cmd.split(), check=True)
         with open(rotated_jpg, 'rb') as file_obj:
-            _, rotated_jpg_url = save_file_obj(rotated_jpg_path, file_obj, settings.TIMELAPSE_CONTAINER)
+            _, rotated_jpg_url = save_file_obj(rotated_jpg_path, file_obj, to_container, long_term_storage=to_long_term_storage)
 
-        shutil.rmtree(to_dir, ignore_errors=True)
+    shutil.rmtree(to_dir, ignore_errors=True)
 
     return (unrotated_jpg_url, rotated_jpg_url)
+
+def shortform_duration(total_seconds):
+    hours, remainder = divmod(total_seconds,60*60)
+    minutes, seconds = divmod(remainder,60)
+    return '{:02}:{:02}'.format(hours, minutes)

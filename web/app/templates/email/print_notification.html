@@ -20,7 +20,7 @@
 </table>
 {% endif %}
 
-{% if print.alerted_at or print.printer.watching and print.user.dh_balance > 0 %}
+{% if print.alerted_at or print.printer.watching_enabled and print.user.dh_balance > 0 %}
 <table style="padding: 18px 0px 18px 0px;" border="0" cellspacing="0" cellpadding="0">
   <tr>
     <td style="padding: 0px 0px 9px 0px;width:100%;">
@@ -37,9 +37,9 @@
 
       {% if print.alerted_at and print.alert_overwrite == 'NOT_FAILED' %}
       👉 You told her it was a false alarm. Help her improve by <a href="{{ timelapse_link }}">giving her the Focused
-        Feedback</a> and earn 2 Detective Hours for yourself.
+        Feedback</a> in the next 30 days and earn 2 Detective Hours for yourself.
       {% else %}
-      👉 Help her improve by <a href="{{ timelapse_link }}">giving her the Focused Feedback</a> and earn
+      👉 Help her improve by <a href="{{ timelapse_link }}">giving her the Focused Feedback</a> in the next 30 days and earn
       2 Detective Hours for yourself.
       {% endif %}
       <div><a
@@ -167,7 +167,7 @@
     <td align="left" valign="top" style="margin:0 auto; font-family: 'Roboto', Helvetica, sans-serif;
       font-size:14px; font-weight:400; color:#888796; line-height:18px;">
       No longer want to receive print notifications by email? <a href="{{ unsub_url }}">Unsubscribe</a> or <a
-        href="https://app.thespaghettidetective.com/user_preferences/">change notification preferences.</a>
+        href="{{ user_pref_url }}">change notification preferences.</a>
     </td>
   </tr>
 </table>

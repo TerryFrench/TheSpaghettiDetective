@@ -20,7 +20,7 @@ from pushbullet import Pushbullet, errors
 from django.utils.html import mark_safe
 
 from config.celery import celery_app
-from lib import redis, channels
+from lib import cache, channels
 from lib.utils import dict_or_none
 
 LOGGER = logging.getLogger(__name__)
@@ -91,6 +91,8 @@ class User(AbstractUser):
     print_notification_by_pushbullet = models.BooleanField(null=False, blank=False, default=True)
     print_notification_by_telegram = models.BooleanField(null=False, blank=False, default=True)
     alert_by_sms = models.BooleanField(null=False, blank=False, default=True)
+    discord_webhook = models.CharField(max_length=256, null=True, blank=True)
+    print_notification_by_discord = models.BooleanField(null=False, blank=False, default=True)
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []
@@ -124,8 +126,12 @@ class User(AbstractUser):
         except errors.InvalidKeyError:
             return False
 
+    def tunnel_usage_over_cap(self):
+        return not self.is_pro and cache.octoprinttunnel_get_stats(self.id) > settings.OCTOPRINT_TUNNEL_CAP * 1.1  # Cap x 1.1 to give some grace period to users
 
 # We use a signal as opposed to a form field because users may sign up using social buttons
+
+
 @receiver(post_save, sender=User)
 def update_consented_at(sender, instance, created, **kwargs):
     if created:
@@ -158,7 +164,7 @@ class Printer(SafeDeleteModel):
         choices=ACTION_ON_FAILURE,
         default=PAUSE,
     )
-    watching = models.BooleanField(default=True)
+    watching_enabled = models.BooleanField(default=True, db_column="watching")
     tools_off_on_pause = models.BooleanField(default=True)
     bed_off_on_pause = models.BooleanField(default=False)
     retract_on_pause = models.FloatField(null=False, default=6.5)
@@ -178,7 +184,7 @@ class Printer(SafeDeleteModel):
 
     @property
     def status(self):
-        status_data = redis.printer_status_get(self.id)
+        status_data = cache.printer_status_get(self.id)
 
         for k, v in status_data.items():
             status_data[k] = json.loads(v)
@@ -187,13 +193,13 @@ class Printer(SafeDeleteModel):
 
     @property
     def pic(self):
-        pic_data = redis.printer_pic_get(self.id)
+        pic_data = cache.printer_pic_get(self.id)
 
         return dict_or_none(pic_data)
 
     @property
     def settings(self):
-        p_settings = redis.printer_settings_get(self.id)
+        p_settings = cache.printer_settings_get(self.id)
 
         for key in ('webcam_flipV', 'webcam_flipH', 'webcam_rotate90'):
             p_settings[key] = p_settings.get(key, 'False') == 'True'
@@ -204,14 +210,34 @@ class Printer(SafeDeleteModel):
 
         return p_settings
 
+    # should_watch and not_watching_reason follow slightly different rules
+    # should_watch is used by the plugin. Therefore printing status is not a factor, otherwise we may have a feedback cycle:
+    #    printer paused -> update server cache -> send should_watch to plugin -> udpate server
+    # not_watching_reason is used by the web app and mobile app
+
     def should_watch(self):
-        if not self.watching or self.user.dh_balance < 0:
+        if not self.watching_enabled or self.user.dh_balance < 0:
             return False
 
         return self.current_print is not None and self.current_print.alert_muted_at is None
 
+    def not_watching_reason(self):
+        if not self.watching_enabled:
+            return '"Watch for failures" is turned off'
+
+        if self.user.dh_balance < 0:
+            return "You have ran out of Detective Hours"
+
+        if not self.actively_printing():
+            return "Printer is not actively printing"
+
+        if self.current_print is not None and self.current_print.alert_muted_at is not None:
+            return "Alerts are muted for current print"
+
+        return None
+
     def actively_printing(self):
-        printer_cur_state = redis.printer_status_get(self.id, 'state')
+        printer_cur_state = cache.printer_status_get(self.id, 'state')
 
         return printer_cur_state and json.loads(printer_cur_state).get('flags', {}).get('printing', False)
 
@@ -381,6 +407,26 @@ class PrinterCommand(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
+def calc_normalized_p(detective_sensitivity: float,
+                      pred: 'PrinterPrediction') -> float:
+    def scale(oldValue, oldMin, oldMax, newMin, newMax):
+        newValue = (((oldValue - oldMin) * (newMax - newMin)) / (oldMax - oldMin)) + newMin
+        return min(newMax, max(newMin, newValue))
+
+    thresh_warning = (pred.rolling_mean_short - pred.rolling_mean_long) * settings.ROLLING_MEAN_SHORT_MULTIPLE
+    thresh_warning = min(settings.THRESHOLD_HIGH, max(settings.THRESHOLD_LOW, thresh_warning))
+    thresh_failure = thresh_warning * settings.ESCALATING_FACTOR
+
+    p = (pred.ewm_mean - pred.rolling_mean_long) * detective_sensitivity
+
+    if p > thresh_failure:
+        return scale(p, thresh_failure, thresh_failure * 1.5, 2.0 / 3.0, 1.0)
+    elif p > thresh_warning:
+        return scale(p, thresh_warning, thresh_failure, 1.0 / 3.0, 2.0 / 3.0)
+    else:
+        return scale(p, 0, thresh_warning, 0, 1.0 / 3.0)
+
+
 class PrinterPrediction(models.Model):
     printer = models.OneToOneField(Printer, on_delete=models.CASCADE, primary_key=True)
     current_frame_num = models.IntegerField(null=False, default=0)
@@ -475,10 +521,6 @@ class Print(SafeDeleteModel):
     def ended_at(self):
         return self.cancelled_at or self.finished_at
 
-    # TODO: remove me after print page switches to Vue
-    def end_status(self):
-        return '(Cancelled)' if self.cancelled_at else ''
-
     def duration(self):
         return self.ended_at() - self.started_at
 
@@ -568,6 +610,7 @@ class PrintShotFeedback(models.Model):
 
     answer = models.CharField(max_length=16, choices=ANSWER_CHOICES, blank=True, null=True, db_index=True)
     answered_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    persisted_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -576,3 +619,20 @@ class PrintShotFeedback(models.Model):
         return mark_safe(f'<img src="{self.image_url}" width="150" height="150" />')
 
     image_tag.short_description = 'Image'
+
+class ActiveMobileDeviceManager(models.Manager):
+    def get_queryset(self):
+        return super(ActiveMobileDeviceManager, self).get_queryset().filter(deactivated_at__isnull=True)
+
+class MobileDevice(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, null=False)
+    platform = models.CharField(max_length=16, null=False, blank=False)
+    app_version = models.CharField(max_length=16, null=False, blank=False)
+    device_token = models.CharField(max_length=256, unique=True, null=False, blank=False, db_index=True)
+    deactivated_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = ActiveMobileDeviceManager()
+    with_inactive = models.Manager()

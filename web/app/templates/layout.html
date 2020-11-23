@@ -47,18 +47,16 @@
   <meta name="msapplication-TileColor" content="#da532c">
   <meta name="theme-color" content="#9965f4">
 
-  <!-- Mustache should be loaded before html body or else there will be errors. -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/mustache.js/3.0.1/mustache.min.js"></script>
-  <script type="text/javascript" src="{% static 'vendor/js/django.mustache.js' %}"></script>
   {% block header_ext %}{% endblock header_ext %}
 </head>
 
 <body>
   {% block body_top_ext %}{% endblock body_top_ext %}
+  {% block navbar %}
   {% with view_name=request.resolver_match.view_name %}
   <nav class="navbar navbar-expand-lg navbar-dark bg-dark static-top">
     <div class="container">
-      <a class="navbar-brand" href="https://www.thespaghettidetective.com/"><img
+      <a class="navbar-brand" href="/printers/"><img
           src="{% static 'img/logo-inverted.png' %}" style="height: 28px;" alt="The Spaghetti Detective" /></a>
       <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarResponsive"
         aria-controls="navbarResponsive" aria-expanded="false" aria-label="Toggle navigation">
@@ -121,6 +119,7 @@
     </div>
   </nav>
   {% endwith %}
+  {% endblock navbar %}
   <main>
     {% block main_top_ext %}{% endblock main_top_ext %}
     <div id="content-wrapper" class="container">
@@ -132,7 +131,7 @@
   </main>
   <footer>
     <div class="container">
-      <p>&copy; The Spaghetti Detective 2019. All Rights Reserved.</p>
+      <p>&copy; The Spaghetti Detective {% now "Y" %}. All Rights Reserved.</p>
     </div>
   </footer>
 
@@ -140,9 +139,12 @@
   <!-- Optional: include a polyfill for ES6 Promises for IE11 and Android browser -->
   <script href="https://cdn.jsdelivr.net/npm/promise-polyfill@7/dist/polyfill.min.js"></script>
   <!-- jQuery first, then Popper.js, then Bootstrap JS -->
-  <script src="https://code.jquery.com/jquery-3.3.1.min.js"
-    integrity="sha256-FgpCb/KJQlLNfOu91ta32o/NMZxltwRo8QtmkMRdAu8=" crossorigin="anonymous"></script>
-  <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/js/bootstrap.bundle.min.js" integrity="sha384-xrRywqdh3PHs8keKZN+8zzc5TX0GRTLCcmivcbNJWm2rs5C8PRhcEn3czEjhAO9o" crossorigin="anonymous"></script>
+  <script
+  src="https://code.jquery.com/jquery-3.4.1.min.js"
+  integrity="sha256-CSXorXvZcTkaix6Yvo6HppcZGetbYMGWSFlBw8HfCJo="
+  crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.0/dist/umd/popper.min.js" integrity="sha384-Q6E9RHvbIyZFJoft+2mJbHaEWldlvI9IOYy5n3zV9zzTtmI3UksdQRVvoxMfooAo" crossorigin="anonymous"></script>
+  <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.4.1/js/bootstrap.min.js" integrity="sha384-wfSDF2E50Y2D1uUdj0O3uMBJnjuUD4Ih7YwaYd1iqfktj0Uod8GCExl3Og8ifwB6" crossorigin="anonymous"></script>
   <script src="//cdn.jsdelivr.net/gh/Mikhus/canvas-gauges@gh-pages/download/2.1.5/all/gauge.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/2.0.0/clipboard.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.11/lodash.min.js"
@@ -155,6 +157,10 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dropzone/5.5.0/min/dropzone.min.js"
     integrity="sha256-fIn7+wa+KI2s9jjRMk/rcswRt8mf82rxIXntRYKLofg=" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap-select@1.13.12/dist/js/bootstrap-select.min.js"></script>
+  <script
+  src="https://browser.sentry-cdn.com/5.20.1/bundle.min.js"
+  integrity="sha384-O8HdAJg1h8RARFowXd2J/r5fIWuinSBtjhwQoPesfVILeXzGpJxvyY/77OaPPXUo"
+  crossorigin="anonymous"></script>
 
   <script src="{% static 'vendor/js/sweetalert2-8.0.1.all.min.js' %}"
     integrity="sha256-mG11cus0fNYH261MLgasqxyp+DcMDZOVUvtVey09hP0=" crossorigin="anonymous"></script>
@@ -170,6 +176,12 @@
       var isProAccount = true;
     {% else %}
       var isProAccount = false;
+    {% endif %}
+    {% if settings.SENTRY_DSN %}
+      Sentry.init({ dsn: '{{ settings.SENTRY_DSN }}' });
+      {% if user.is_authenticated %}
+        Sentry.setUser({"email": "{{ user.email }}"});
+      {% endif %}
     {% endif %}
   </script>
   <script src="{% static 'js/shared.js' %}"></script>
